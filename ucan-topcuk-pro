@@ -1,0 +1,199 @@
+import pygame
+import random
+import sys
+import sqlite3
+import time
+
+# --- 1. VERİTABANI SİSTEMİ ---
+def db_kur():
+    conn = sqlite3.connect('ucantopcuk_final_boss.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS data (toplam_puan INTEGER, aktif_renk TEXT, en_yuksek_skor INTEGER)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS envanter (renk TEXT)''')
+    c.execute("SELECT count(*) FROM data")
+    if c.fetchone()[0] == 0:
+        c.execute("INSERT INTO data VALUES (0, 'SARI', 0)")
+        c.execute("INSERT INTO envanter VALUES ('SARI')")
+    conn.commit(); conn.close()
+
+def veri_getir():
+    conn = sqlite3.connect('ucantopcuk_final_boss.db'); c = conn.cursor()
+    res = c.execute("SELECT toplam_puan, aktif_renk, en_yuksek_skor FROM data").fetchone()
+    c.execute("SELECT renk FROM envanter"); env = [r[0] for r in c.fetchall()]
+    conn.close(); return res[0], res[1], res[2], env
+
+def veri_guncelle(p_ekle, y_renk=None, n_skor=None):
+    conn = sqlite3.connect('ucantopcuk_final_boss.db'); c = conn.cursor()
+    if p_ekle != 0: c.execute("UPDATE data SET toplam_puan = toplam_puan + ?", (p_ekle,))
+    if y_renk: c.execute("UPDATE data SET aktif_renk = ?", (y_renk,))
+    if n_skor is not None: c.execute("UPDATE data SET en_yuksek_skor = ?", (n_skor,))
+    conn.commit(); conn.close()
+
+# --- 2. AYARLAR ---
+pygame.init(); db_kur()
+info = pygame.display.Info()
+G, Y = info.current_w, info.current_h
+ekran = pygame.display.set_mode((G, Y), pygame.FULLSCREEN)
+saat = pygame.time.Clock()
+
+RENKLER = {
+    "SARI": (255, 220, 0), "MAVI": (0, 200, 255), "KIRMIZI": (255, 50, 50),
+    "MOR": (180, 0, 255), "YESIL": (50, 255, 50), "TURUNCU": (255, 140, 0),
+    "PEMBE": (255, 105, 180), "BEYAZ": (240, 240, 240), "SIYAH": (20, 20, 20)
+}
+FIYATLAR = {"MAVI": 5000, "KIRMIZI": 10000, "MOR": 20000, "YESIL": 35000, "TURUNCU": 50000, "PEMBE": 75000, "BEYAZ": 100000, "SIYAH": 250000}
+
+f_baslik = pygame.font.SysFont("Arial", 70, bold=True)
+f_orta = pygame.font.SysFont("Arial", 40, bold=True)
+f_kucuk = pygame.font.SysFont("Arial", 25, bold=True)
+
+def reset_game():
+    tp, ar_adi, hs, _ = veri_getir()
+    return {
+        "durum": "MENU", "y": Y//2, "hiz": 0, "engeller": [], "powerups": [],
+        "skor": 0, "hiz_e": 5.5, "renk": RENKLER.get(ar_adi, RENKLER["SARI"]), 
+        "high_score": hs, "total_puan": tp, "kalkan_bitis": 0, 
+        "msg": "", "tebrik_yazi": "", "tebrik_zaman": 0
+    }
+
+def engel_yap(skor):
+    bosluk = 550
+    ust = random.randint(100, Y - bosluk - 100)
+    hareketli = (skor >= 20)
+    return {"x": G, "ust": ust, "alt": ust + bosluk, "gec": False, "offset": 0, "hiz_v": 2.0 if hareketli else 0}
+
+oyun = reset_game()
+
+while True:
+    # --- GECE MODU DÖNGÜSÜ (Her 30'da bir 10 parkur) ---
+    # skor % 30 < 10 kontrolü: 30-40, 60-70, 90-100... arası gece olur
+    is_gece = (oyun["skor"] > 0 and (oyun["skor"] // 10) % 3 == 0 and oyun["skor"] % 30 >= 0)
+    # Basitçe: 30, 60, 90 skora ulaştığında tetiklenir.
+    suan_gece = any(oyun["skor"] >= i and oyun["skor"] < i+10 for i in range(30, 1000, 30))
+
+    if suan_gece:
+        bg_renk = (20, 24, 54)
+    elif oyun["skor"] >= 20:
+        bg_renk = (90, 30, 30)
+    else:
+        bg_renk = (52, 152, 219)
+    
+    ekran.fill(bg_renk)
+    
+    if suan_gece:
+        pygame.draw.circle(ekran, (240, 240, 240), (G - 150, 150), 60)
+        pygame.draw.circle(ekran, bg_renk, (G - 180, 150), 60)
+
+    mx, my = pygame.mouse.get_pos(); tik = False
+    for ev in pygame.event.get():
+        if ev.type == pygame.QUIT: pygame.quit(); sys.exit()
+        if ev.type == pygame.MOUSEBUTTONDOWN: tik = True
+
+    t_puan, aktif_ad, h_score, env = veri_getir()
+
+    if oyun["durum"] == "MENU":
+        ekran.blit(f_baslik.render("UÇAN TOPÇUK PRO", True, (255, 255, 255)), (G//2 - 250, 150))
+        ekran.blit(f_orta.render(f"TOPLAM BİRİKEN: {t_puan} P", True, (255, 220, 0)), (G//2 - 200, 250))
+        b_bas = pygame.Rect(G//2 - 200, Y//2 - 30, 400, 100); pygame.draw.rect(ekran, (50, 255, 50), b_bas, 0, 20)
+        b_mag = pygame.Rect(G//2 - 200, Y//2 + 100, 400, 100); pygame.draw.rect(ekran, (0, 200, 255), b_mag, 0, 20)
+        ekran.blit(f_orta.render("OYUNA BAŞLA", True, (30,30,30)), (b_bas.x + 85, b_bas.y + 30))
+        ekran.blit(f_orta.render("MAĞAZA", True, (30,30,30)), (b_mag.x + 120, b_mag.y + 30))
+        if tik:
+            if b_bas.collidepoint(mx, my): oyun["durum"] = "HAZIR"
+            if b_mag.collidepoint(mx, my): oyun["durum"] = "MAGAZA"
+
+    elif oyun["durum"] == "MAGAZA":
+        ekran.fill((30, 30, 30))
+        b_geri = pygame.Rect(50, 50, 150, 70); pygame.draw.rect(ekran, (255, 50, 50), b_geri, 0, 15)
+        ekran.blit(f_kucuk.render("GERİ DÖN", True, (255,255,255)), (65, 70))
+        if tik and b_geri.collidepoint(mx, my): oyun["durum"] = "MENU"; oyun["msg"] = ""
+        for i, (ad, fiyat) in enumerate(FIYATLAR.items()):
+            x_p = G//2 - 350 if i < 4 else G//2 + 50
+            y_p = 180 + (i % 4) * 130
+            rect = pygame.Rect(x_p, y_p, 320, 110); pygame.draw.rect(ekran, (60, 60, 60), rect, 0, 15)
+            pygame.draw.circle(ekran, RENKLER[ad], (rect.x + 40, rect.y + 55), 25)
+            alınabilir = t_puan >= fiyat
+            btn_renk = (50, 255, 50) if ad in env else ((100, 100, 100) if not alınabilir else (50, 255, 50))
+            btn_r = pygame.Rect(rect.x + 80, rect.y + 60, 220, 40); pygame.draw.rect(ekran, btn_renk, btn_r, 0, 10)
+            txt = "SEÇİLDİ" if ad == aktif_ad else ("SEÇ" if ad in env else f"{fiyat} P")
+            ekran.blit(f_kucuk.render(txt, True, (0,0,0)), (btn_r.x + 20, btn_r.y + 5))
+            if tik and btn_r.collidepoint(mx, my):
+                if ad in env: veri_guncelle(0, ad); oyun["renk"] = RENKLER[ad]
+                elif alınabilir:
+                    veri_guncelle(-fiyat, ad); oyun["renk"] = RENKLER[ad]
+                    conn = sqlite3.connect('ucantopcuk_final_boss.db'); c = conn.cursor()
+                    c.execute("INSERT INTO envanter VALUES (?)", (ad,)); conn.commit(); conn.close()
+                else: oyun["msg"] = "YETERSİZ PUAN!"
+        if oyun["msg"]: ekran.blit(f_orta.render(oyun["msg"], True, (255, 50, 50)), (G//2 - 150, Y - 100))
+
+    elif oyun["durum"] == "HAZIR":
+        ekran.blit(f_baslik.render("BAŞLAMAK İÇİN DOKUN", True, (255, 255, 255)), (G//2 - 350, Y//2 - 50))
+        if tik: oyun["durum"] = "OYUN"; oyun["hiz"] = -11; oyun["engeller"].append(engel_yap(0))
+
+    elif oyun["durum"] == "OYUN":
+        if tik: oyun["hiz"] = -11
+        oyun["hiz"] += 0.55; oyun["y"] += oyun["hiz"]
+        
+        k_sure = max(0, int(oyun["kalkan_bitis"] - time.time()))
+        k_aktif = k_sure > 0
+
+        if random.random() < 0.006 and not k_aktif: 
+            oyun["powerups"].append({"x": G, "y": random.randint(200, Y-200)})
+
+        for p in oyun["powerups"][:]:
+            p["x"] -= oyun["hiz_e"]
+            pygame.draw.circle(ekran, (180, 0, 255), (p["x"], p["y"]), 35, 5)
+            ekran.blit(f_kucuk.render("KALKAN", True, (180, 0, 255)), (p["x"]-40, p["y"]-65))
+            if pygame.Rect(115, oyun["y"]-35, 70, 70).colliderect(pygame.Rect(p["x"]-30, p["y"]-30, 60, 60)):
+                oyun["kalkan_bitis"] = time.time() + 8; oyun["powerups"].remove(p)
+
+        for e in oyun["engeller"][:]:
+            e["x"] -= oyun["hiz_e"]
+            if e["hiz_v"] != 0: 
+                e["offset"] += e["hiz_v"]
+                if abs(e["offset"]) > 140: e["hiz_v"] *= -1
+            
+            e_r = (46, 204, 113) if not suan_gece else (41, 128, 185)
+            u_r = pygame.Rect(e["x"], 0, 120, e["ust"] + e["offset"])
+            a_r = pygame.Rect(e["x"], e["alt"] + e["offset"], 120, Y)
+            pygame.draw.rect(ekran, e_r, u_r, 0, 5); pygame.draw.rect(ekran, e_r, a_r, 0, 5)
+            
+            if not k_aktif:
+                if pygame.Rect(120, oyun["y"]-25, 50, 50).colliderect(u_r) or pygame.Rect(120, oyun["y"]-25, 50, 50).colliderect(a_r):
+                    oyun["durum"] = "BITTI"
+            
+            if not e["gec"] and e["x"] < 150: 
+                oyun["skor"] += 1; e["gec"] = True; oyun["hiz_e"] += 0.02
+                if oyun["skor"] % 10 == 0: 
+                    oyun["tebrik_yazi"] = "HARİKA!"; oyun["tebrik_zaman"] = time.time() + 1.5
+                if oyun["skor"] % 30 == 0:
+                    oyun["tebrik_yazi"] = "GECE MODU!"; oyun["tebrik_zaman"] = time.time() + 2
+                
+            if e["x"] < -130: oyun["engeller"].remove(e)
+        
+        if len(oyun["engeller"]) > 0 and oyun["engeller"][-1]["x"] < G - 950: 
+            oyun["engeller"].append(engel_yap(oyun["skor"]))
+
+        if time.time() < oyun["tebrik_zaman"]:
+            ekran.blit(f_orta.render(oyun["tebrik_yazi"], True, (255, 255, 255)), (G//2 - 100, Y//2 - 200))
+
+        pygame.draw.circle(ekran, oyun["renk"], (150, int(oyun["y"])), 35)
+        if k_aktif:
+            pygame.draw.circle(ekran, (180, 0, 255), (150, int(oyun["y"])), 55, 6)
+            ekran.blit(f_orta.render(str(k_sure), True, (255, 255, 255)), (140, int(oyun["y"]) - 95))
+        pygame.draw.circle(ekran, (0,0,0), (150, int(oyun["y"])), 35, 4)
+        
+        if oyun["y"] > Y or oyun["y"] < 0: oyun["durum"] = "BITTI"
+        ekran.blit(f_baslik.render(str(oyun["skor"]), True, (255,255,255)), (G//2, 50))
+
+    elif oyun["durum"] == "BITTI":
+        veri_guncelle(oyun["skor"]) 
+        if oyun["skor"] > h_score: veri_guncelle(0, n_skor=oyun["skor"])
+        ekran.fill((20, 20, 20))
+        ekran.blit(f_baslik.render("OYUN BİTTİ", True, (255, 50, 50)), (G//2 - 180, Y//2 - 100))
+        ekran.blit(f_orta.render(f"PUAN: {oyun['skor']}", True, (255, 255, 255)), (G//2 - 80, Y//2))
+        b_r = pygame.Rect(G//2 - 200, Y//2 + 100, 400, 95); pygame.draw.rect(ekran, (255,255,255), b_r, 0, 20)
+        ekran.blit(f_orta.render("ANA MENÜ", True, (0,0,0)), (b_r.x + 110, b_r.y + 30))
+        if tik and b_r.collidepoint(mx, my): oyun = reset_game()
+
+    pygame.display.flip(); saat.tick(60)
